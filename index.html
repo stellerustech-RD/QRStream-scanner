@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR Stream - 光通信文件传输</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- QR Code Generator -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- QR Code Scanner (jsQR) -->
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; }
+        .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+        canvas { border-radius: 8px; }
+        /* Hide scrollbar for clean UI */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+    </style>
+</head>
+<body class="flex flex-col min-h-screen font-sans">
+
+    <!-- Header -->
+    <header class="p-4 bg-slate-800 shadow-md border-b border-slate-700 flex justify-between items-center">
+        <h1 class="text-xl font-bold tracking-wider text-blue-400">⚡ QR Stream</h1>
+        <div class="text-xs text-slate-400">v1.0.0</div>
+    </header>
+
+    <!-- Tabs -->
+    <div class="flex justify-center mt-6 gap-8 text-lg font-medium">
+        <button id="btn-tab-send" onclick="switchTab('send')" class="pb-2 px-4 tab-active transition-colors">
+            📤 发送 (PC)
+        </button>
+        <button id="btn-tab-receive" onclick="switchTab('receive')" class="pb-2 px-4 text-slate-500 hover:text-slate-300 transition-colors">
+            📥 接收 (手机)
+        </button>
+    </div>
+
+    <!-- Main Content -->
+    <main class="flex-grow flex flex-col items-center p-4 w-full max-w-2xl mx-auto">
+
+        <!-- SENDER SECTION -->
+        <section id="section-send" class="w-full flex flex-col items-center space-y-6">
+            <div class="w-full bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
+                <label class="block mb-2 text-sm text-slate-400">第一步：选择文件</label>
+                <input type="file" id="fileInput" class="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"/>
+                <p class="mt-2 text-xs text-slate-500">建议文件小于 5MB 以保证传输体验。</p>
+            </div>
+
+            <div class="w-full bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
+                <label class="block mb-2 text-sm text-slate-400">第二步：配置速度</label>
+                <div class="flex items-center gap-4">
+                    <span class="text-xs">慢 (稳)</span>
+                    <input type="range" id="speedRange" min="50" max="500" value="150" class="w-full h-2 bg-slate-600 rounded-lg appearance-none cursor-pointer">
+                    <span class="text-xs">快 (急)</span>
+                </div>
+                <div class="text-center mt-2 text-blue-300 text-sm">每张停留: <span id="speedDisplay">150</span> ms</div>
+            </div>
+
+            <div class="flex gap-4">
+                <button onclick="startTransmission()" id="btnStart" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-8 rounded-lg shadow transition-transform transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
+                    开始播放
+                </button>
+                <button onclick="stopTransmission()" id="btnStop" class="bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-8 rounded-lg shadow transition-transform transform active:scale-95 hidden">
+                    停止
+                </button>
+            </div>
+
+            <!-- QR Display Area -->
+            <div id="qr-container" class="bg-white p-4 rounded-lg hidden">
+                <div id="qrcode"></div>
+            </div>
+            <div id="send-status" class="text-slate-400 text-sm font-mono hidden">准备就绪</div>
+        </section>
+
+        <!-- RECEIVER SECTION -->
+        <section id="section-receive" class="w-full flex flex-col items-center space-y-6 hidden">
+            <div class="w-full bg-slate-800 p-4 rounded-xl shadow-lg border border-slate-700 relative overflow-hidden">
+                <div id="camera-loading" class="absolute inset-0 flex items-center justify-center bg-slate-900 z-10 hidden">
+                    <span class="text-blue-400 animate-pulse">正在启动摄像头...</span>
+                </div>
+                <!-- Video Element -->
+                <video id="video" playsinline class="w-full rounded-lg bg-black object-cover" style="height: 300px;"></video>
+                <!-- Hidden Canvas for Processing -->
+                <canvas id="canvas" hidden></canvas>
+                
+                <button onclick="startScanning()" id="btnScan" class="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-full shadow-lg text-sm z-20">
+                    开启摄像头
+                </button>
+            </div>
+
+            <!-- Progress Bar -->
+            <div class="w-full bg-slate-700 rounded-full h-6 relative overflow-hidden">
+                <div id="progressBar" class="bg-blue-500 h-6 transition-all duration-300 ease-out" style="width: 0%"></div>
+                <div id="progressText" class="absolute inset-0 flex items-center justify-center text-xs font-bold text-white drop-shadow-md">等待扫描...</div>
+            </div>
+
+            <!-- Stats -->
+            <div class="grid grid-cols-2 gap-4 w-full text-center">
+                <div class="bg-slate-800 p-3 rounded border border-slate-700">
+                    <div class="text-xs text-slate-400">已接收块</div>
+                    <div id="chunksCount" class="text-xl font-mono text-emerald-400">0 / 0</div>
+                </div>
+                <div class="bg-slate-800 p-3 rounded border border-slate-700">
+                    <div class="text-xs text-slate-400">当前文件</div>
+                    <div id="fileNameDisplay" class="text-sm truncate text-blue-300">-</div>
+                </div>
+            </div>
+
+            <div id="downloadArea" class="hidden">
+                <button onclick="downloadFile()" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-8 rounded-lg shadow animate-bounce">
+                    💾 下载文件
+                </button>
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+        // --- GLOBAL CONFIG ---
+        const CHUNK_SIZE = 700; // Characters per QR. Lower = easier to scan. Higher = faster transfer.
+        
+        // --- UI LOGIC ---
+        function switchTab(tab) {
+            document.querySelectorAll('section').forEach(el => el.classList.add('hidden'));
+            document.getElementById(`section-${tab}`).classList.remove('hidden');
+            
+            document.getElementById('btn-tab-send').className = tab === 'send' ? 'pb-2 px-4 tab-active transition-colors' : 'pb-2 px-4 text-slate-500 hover:text-slate-300 transition-colors';
+            document.getElementById('btn-tab-receive').className = tab === 'receive' ? 'pb-2 px-4 tab-active transition-colors' : 'pb-2 px-4 text-slate-500 hover:text-slate-300 transition-colors';
+            
+            if(tab === 'receive') {
+                // Warning if not HTTPS
+                if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+                    alert("注意：浏览器通常要求在 HTTPS 环境下才能调用摄像头。");
+                }
+            } else {
+                stopScanning();
+            }
+        }
+
+        document.getElementById('speedRange').addEventListener('input', (e) => {
+            document.getElementById('speedDisplay').innerText = e.target.value;
+            // Update interval if running is handled in start loop
+        });
+
+        // --- SENDER LOGIC ---
+        let sendInterval = null;
+        let fileChunks = [];
+        let currentChunkIndex = 0;
+
+        async function startTransmission() {
+            const fileInput = document.getElementById('fileInput');
+            if (!fileInput.files.length) {
+                alert("请先选择文件！");
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+
+            document.getElementById('btnStart').innerText = "处理中...";
+            document.getElementById('btnStart').disabled = true;
+
+            reader.onload = async function(e) {
+                const base64Data = e.target.result; // Data URL
+                const fileName = file.name;
+                
+                // Prepare Chunks
+                fileChunks = [];
+                const totalLength = base64Data.length;
+                let offset = 0;
+                
+                // Metadata format: INDEX|TOTAL|FILENAME|DATA_SUBSTRING
+                // We use a simpler index strategy to save space.
+                // Protocol: "I/T|Name|Data"
+                
+                const totalChunksCalc = Math.ceil(totalLength / CHUNK_SIZE);
+
+                for (let i = 0; i < totalChunksCalc; i++) {
+                    const chunkData = base64Data.slice(offset, offset + CHUNK_SIZE);
+                    // Minimal header: Index(Hex)|Total(Hex)|Name|Data
+                    // Using pipe | as separator
+                    const header = `${i}|${totalChunksCalc}|${fileName}|`;
+                    fileChunks.push(header + chunkData);
+                    offset += CHUNK_SIZE;
+                }
+
+                document.getElementById('qr-container').classList.remove('hidden');
+                document.getElementById('btnStart').classList.add('hidden');
+                document.getElementById('btnStop').classList.remove('hidden');
+                document.getElementById('send-status').classList.remove('hidden');
+
+                // Clear previous QR
+                document.getElementById('qrcode').innerHTML = "";
+                
+                // Create QR Object
+                const qrCodeObj = new QRCode(document.getElementById("qrcode"), {
+                    width: 300,
+                    height: 300,
+                    colorDark : "#000000",
+                    colorLight : "#ffffff",
+                    correctLevel : QRCode.CorrectLevel.L // Low error correction for max data density
+                });
+
+                currentChunkIndex = 0;
+                
+                const playLoop = () => {
+                    if (!document.getElementById('section-send').classList.contains('hidden')) {
+                        const data = fileChunks[currentChunkIndex];
+                        qrCodeObj.clear();
+                        qrCodeObj.makeCode(data);
+                        
+                        document.getElementById('send-status').innerText = `正在播放: ${currentChunkIndex + 1} / ${fileChunks.length}`;
+                        
+                        currentChunkIndex++;
+                        if (currentChunkIndex >= fileChunks.length) {
+                            currentChunkIndex = 0; // Loop
+                        }
+                    }
+                };
+
+                // Initial run
+                playLoop();
+
+                // Dynamic Interval
+                if (sendInterval) clearInterval(sendInterval);
+                
+                const updateSpeed = () => {
+                    clearInterval(sendInterval);
+                    const speed = parseInt(document.getElementById('speedRange').value);
+                    sendInterval = setInterval(playLoop, speed);
+                }
+
+                document.getElementById('speedRange').addEventListener('change', updateSpeed);
+                updateSpeed(); // Start with current speed
+            };
+
+            reader.readAsDataURL(file);
+        }
+
+        function stopTransmission() {
+            clearInterval(sendInterval);
+            document.getElementById('qr-container').classList.add('hidden');
+            document.getElementById('btnStart').classList.remove('hidden');
+            document.getElementById('btnStart').innerText = "开始播放";
+            document.getElementById('btnStart').disabled = false;
+            document.getElementById('btnStop').classList.add('hidden');
+            document.getElementById('send-status').classList.add('hidden');
+        }
+
+        // --- RECEIVER LOGIC ---
+        let videoStream = null;
+        let isScanning = false;
+        let receivedChunks = new Set(); // Stores indices
+        let chunksData = {}; // Stores actual data: { 0: "...", 1: "..." }
+        let totalChunksExpected = 0;
+        let currentFileName = "";
+
+        async function startScanning() {
+            const video = document.getElementById("video");
+            const canvasElement = document.getElementById("canvas");
+            const canvas = canvasElement.getContext("2d");
+            const loadingMsg = document.getElementById("camera-loading");
+            const btnScan = document.getElementById("btnScan");
+
+            // Reset State
+            receivedChunks.clear();
+            chunksData = {};
+            totalChunksExpected = 0;
+            updateProgress();
+            document.getElementById('downloadArea').classList.add('hidden');
+
+            try {
+                loadingMsg.classList.remove('hidden');
+                videoStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "environment" } 
+                });
+                video.srcObject = videoStream;
+                video.setAttribute("playsinline", true); // required to tell iOS safari we don't want fullscreen
+                video.play();
+                
+                isScanning = true;
+                btnScan.classList.add('hidden');
+                requestAnimationFrame(tick);
+                loadingMsg.classList.add('hidden');
+            } catch (err) {
+                loadingMsg.innerText = "无法访问摄像头: " + err.message;
+                console.error(err);
+            }
+
+            function tick() {
+                if (!isScanning) return;
+
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    canvasElement.height = video.videoHeight;
+                    canvasElement.width = video.videoWidth;
+                    canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+                    
+                    const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
+                    
+                    // jsQR is computationally heavy, might lag on old phones
+                    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                        inversionAttempts: "dontInvert",
+                    });
+
+                    if (code) {
+                        handleDecodedData(code.data);
+                        // Visual feedback (draw box)
+                        drawLine(code.location.topLeftCorner, code.location.topRightCorner, "#FF3B58");
+                        drawLine(code.location.topRightCorner, code.location.bottomRightCorner, "#FF3B58");
+                        drawLine(code.location.bottomRightCorner, code.location.bottomLeftCorner, "#FF3B58");
+                        drawLine(code.location.bottomLeftCorner, code.location.topLeftCorner, "#FF3B58");
+                    }
+                }
+                requestAnimationFrame(tick);
+            }
+
+            function drawLine(begin, end, color) {
+                canvas.beginPath();
+                canvas.moveTo(begin.x, begin.y);
+                canvas.lineTo(end.x, end.y);
+                canvas.lineWidth = 4;
+                canvas.strokeStyle = color;
+                canvas.stroke();
+            }
+        }
+
+        function handleDecodedData(dataString) {
+            // Protocol: Index|Total|Name|Data
+            // We need to split carefully because Data might contain pipe (unlikely in Base64 but possible in url params)
+            // But standard Base64 A-Z a-z 0-9 + / = 
+            // So pipe | is a safe separator if we didn't use it inside filename.
+            // Let's assume filename doesn't have | for this demo.
+            
+            try {
+                const parts = dataString.split('|');
+                if (parts.length < 4) return; // Invalid packet
+
+                const index = parseInt(parts[0]);
+                const total = parseInt(parts[1]);
+                const filename = parts[2];
+                // Reassemble the data part (in case filename had | which is edge case, but rest is data)
+                const data = parts.slice(3).join('|'); 
+
+                if (isNaN(index) || isNaN(total)) return;
+
+                // Set Metadata on first successful read
+                if (totalChunksExpected === 0) {
+                    totalChunksExpected = total;
+                    currentFileName = filename;
+                    document.getElementById('fileNameDisplay').innerText = filename;
+                }
+
+                // If Packet belongs to current file transaction
+                if (total === totalChunksExpected && filename === currentFileName) {
+                    if (!receivedChunks.has(index)) {
+                        receivedChunks.add(index);
+                        chunksData[index] = data;
+                        updateProgress();
+                        
+                        // Haptic feedback if available
+                        if (navigator.vibrate) navigator.vibrate(50);
+                    }
+                }
+
+                // Check Completion
+                if (receivedChunks.size === totalChunksExpected && totalChunksExpected > 0) {
+                    stopScanning();
+                    document.getElementById('progressText').innerText = "传输完成! 🎉";
+                    document.getElementById('downloadArea').classList.remove('hidden');
+                }
+
+            } catch (e) {
+                console.error("Parse error", e);
+            }
+        }
+
+        function updateProgress() {
+            const count = receivedChunks.size;
+            const total = totalChunksExpected || 0; // avoid div by zero
+            document.getElementById('chunksCount').innerText = `${count} / ${total}`;
+            
+            const percent = total === 0 ? 0 : Math.round((count / total) * 100);
+            document.getElementById('progressBar').style.width = `${percent}%`;
+            if (percent < 100) {
+                document.getElementById('progressText').innerText = `扫描中... ${percent}%`;
+            }
+        }
+
+        function stopScanning() {
+            isScanning = false;
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+                videoStream = null;
+            }
+            document.getElementById('btnScan').classList.remove('hidden');
+            document.getElementById('btnScan').innerText = "重新扫描";
+        }
+
+        function downloadFile() {
+            // Reassemble
+            let combinedBase64 = "";
+            for (let i = 0; i < totalChunksExpected; i++) {
+                if (!chunksData[i]) {
+                    alert("数据损坏：缺少块 " + i);
+                    return;
+                }
+                combinedBase64 += chunksData[i];
+            }
+
+            // Trigger Download
+            fetch(combinedBase64)
+                .then(res => res.blob())
+                .then(blob => {
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    a.download = currentFileName;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                })
+                .catch(err => {
+                    alert("文件生成失败: " + err.message);
+                });
+        }
+    </script>
+</body>
+</html>
